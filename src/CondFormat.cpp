@@ -1,3 +1,6 @@
+// src/CondFormat.cpp
+// bk1
+
 #include "CondFormat.h"
 #include "Settings.h"
 #include "Data.h"
@@ -32,7 +35,12 @@ CondFormat::CondFormat(const QString& filter,
       m_align(alignment)
 {
     if (!filter.isEmpty())
-        m_sqlCondition = filterToSqlCondition(filter, encoding);
+    {
+        if (filter.trimmed().startsWith("expr:", Qt::CaseInsensitive))
+            m_sqlCondition = filter.toStdString();
+        else
+            m_sqlCondition = filterToSqlCondition(filter, encoding);
+    }
 }
 
 CondFormat::CondFormat(const QString& filter,
@@ -43,7 +51,12 @@ CondFormat::CondFormat(const QString& filter,
 {
 
     if (!filter.isEmpty())
-        m_sqlCondition = filterToSqlCondition(filter, encoding);
+    {
+        if (filter.trimmed().startsWith("expr:", Qt::CaseInsensitive))
+            m_sqlCondition = filter.toStdString();
+        else
+            m_sqlCondition = filterToSqlCondition(filter, encoding);
+    }
 
     m_bgColor = QColor(model->data(index, Qt::BackgroundRole).toString());
     m_fgColor = QColor(model->data(index, Qt::ForegroundRole).toString());

@@ -1,9 +1,13 @@
-﻿#include "sqlitetablemodel.h"
+﻿// src/sqlitetablemodel.cpp
+// bk1
+
+#include "sqlitetablemodel.h"
 #include "sqlitedb.h"
 #include "sqlite.h"
 #include "Settings.h"
 #include "Data.h"
 #include "CondFormat.h"
+#include "CondFormatExpr.h"
 #include "RowLoader.h"
 
 #include <QMessageBox>
@@ -265,7 +269,7 @@ QVariant SqliteTableModel::headerData(int section, Qt::Orientation orientation, 
                     const sqlb::OrderBy sortedColumn = m_query.orderBy()[i];
                     // Append sort indicator with direction and ordinal number in superscript style
                     if (sortedColumn.expr == plainHeader) {
-                        sortIndicator = sortedColumn.direction == sqlb::OrderBy::Ascending ? " ▴" : " ▾";
+                        sortIndicator = sortedColumn.direction == sqlb::OrderBy::Ascending ? QString(" ") + QChar(0x25B4) : QString(" ") + QChar(0x25BE);
                         if(m_query.orderBy().size() > 1)
                             sortIndicator.append(toSuperScript(i+1));
                         break;
@@ -280,7 +284,7 @@ QVariant SqliteTableModel::headerData(int section, Qt::Orientation orientation, 
         return QString::number(section + 1);
 }
 
-QVariant SqliteTableModel::getMatchingCondFormat(const std::map<size_t, std::vector<CondFormat>>& mCondFormats, size_t column, const QString& value, int role) const
+QVariant SqliteTableModel::getMatchingCondFormat(const std::map<size_t, std::vector<CondFormat>>& mCondFormats, size_t row, size_t column, const QString& value, int role) const
 {
     if (!mCondFormats.count(column))
         return QVariant();
@@ -291,17 +295,52 @@ QVariant SqliteTableModel::getMatchingCondFormat(const std::map<size_t, std::vec
 
     // For each conditional format for this column,
     // if the condition matches the current data, return the associated format.
-    for (const CondFormat& eachCondFormat : mCondFormats.at(column)) {
-        if (isNumber && !contains(eachCondFormat.sqlCondition(), '\''))
-            sql = "SELECT " + value.toStdString() + " " + eachCondFormat.sqlCondition();
-        else
-            sql = "SELECT " + sqlb::escapeString(value.toStdString()) + " " + eachCondFormat.sqlCondition();
+    for (const CondFormat& eachCondFormat : mCondFormats.at(column))
+    {
+        bool matched = false;
 
-        // Empty filter means: apply format to any row.
-        // Query the DB for the condition, waiting in case there is a loading in progress.
-        if (eachCondFormat.filter().isEmpty() || m_db.querySingleValueFromDb(sql, false, DBBrowserDB::Wait) == "1")
-            switch (role) {
-              case Qt::ForegroundRole:
+        /*
+        * expr: ... is handled by CondFormatExpr.
+        */
+        const QString condition =
+            QString::fromStdString(eachCondFormat.sqlCondition());
+
+        if (CondFormatExpr::isExpression(condition))
+        {
+            QModelIndex cellIndex = index(
+                static_cast<int>(row),
+                static_cast<int>(column));
+
+            matched = CondFormatExpr::evaluate(
+                condition,
+                this,
+                cellIndex);
+        }
+        else
+        {
+            /*
+             * Existing SQL-based conditional format handling.
+             */
+            if (isNumber && !contains(eachCondFormat.sqlCondition(), '\''))
+                sql = "SELECT " + value.toStdString() + " " + eachCondFormat.sqlCondition();
+            else
+                sql = "SELECT " + sqlb::escapeString(value.toStdString()) + " " + eachCondFormat.sqlCondition();
+
+            // Empty filter means: apply format to any row.
+            // Query the DB for the condition, waiting in case there is a loading in progress.
+            matched =
+                eachCondFormat.filter().isEmpty() ||
+                m_db.querySingleValueFromDb(
+                    sql,
+                    false,
+                    DBBrowserDB::Wait) == "1";
+        }
+
+        if (matched)
+        {
+            switch (role)
+            {
+            case Qt::ForegroundRole:
                 return eachCondFormat.foregroundColor();
             case Qt::BackgroundRole:
                 return eachCondFormat.backgroundColor();
@@ -310,7 +349,9 @@ QVariant SqliteTableModel::getMatchingCondFormat(const std::map<size_t, std::vec
             case Qt::TextAlignmentRole:
                 return static_cast<int>(eachCondFormat.alignmentFlag() | Qt::AlignVCenter);
             }
+        }
     }
+
     return QVariant();
 }
 
@@ -326,14 +367,13 @@ QVariant SqliteTableModel::getMatchingCondFormat(size_t row, size_t column, cons
         const QByteArray& row_id_data = row_available ? m_cache.at(row).at(0) : blank_data;
         lock.unlock();
 
-        format = getMatchingCondFormat(m_mRowIdFormats, column, row_id_data, role);
+        format = getMatchingCondFormat(m_mRowIdFormats, row, column, row_id_data, role);
         if (format.isValid())
             return format;
     }
     if (m_mCondFormats.count(column))
-        return getMatchingCondFormat(m_mCondFormats, column, value, role);
-    else
-        return QVariant();
+        return getMatchingCondFormat(m_mCondFormats, row, column, value, role);
+    return QVariant();
 }
 
 QVariant SqliteTableModel::data(const QModelIndex &index, int role) const

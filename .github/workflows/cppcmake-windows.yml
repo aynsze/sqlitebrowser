@@ -147,49 +147,29 @@ jobs:
           ./build.cmd ${{ matrix.arch }}
           $DATE=$(Get-Date -Format "yyyyMMdd")
           if ("${{ inputs.NIGHTLY }}" -eq "true") {
-            mv DB.Browser.for.SQLite-*.msi "DB.Browser.for.SQLite-$DATE-win-${{ matrix.arch }}.msi"
+            mv DB.Browser.for.SQLite-*.msi "My.SQLite.Browser-$DATE-win-${{ matrix.arch }}.msi"
           } else {
-            mv DB.Browser.for.SQLite-*.msi "DB.Browser.for.SQLite-dev-$(git rev-parse --short HEAD)-win-${{ matrix.arch }}.msi"
+            mv DB.Browser.for.SQLite-*.msi "My.SQLite.Browser-dev-$(git rev-parse --short HEAD)-win-${{ matrix.arch }}.msi"
           }
-
-      - if: github.event_name != 'pull_request'
-        name: Upload artifacts for code signing with SignPath
-        id: unsigned-artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: build-artifacts-${{ matrix.os }}-win-${{ matrix.arch }}-unsigned
-          path: installer\windows\DB.Browser.for.SQLite-*.msi
-          retention-days: 1
-
-      # Change the signing-policy-slug when you release an RC, RTM or stable release.
-      - if: github.event_name != 'pull_request'
-        name: Code signing with SignPath
-        uses: signpath/github-action-submit-signing-request@v2
-        with:
-          api-token: "${{ secrets.SIGNPATH_API_TOKEN }}"
-          github-artifact-id: "${{ steps.unsigned-artifacts.outputs.artifact-id }}"
-          organization-id: "${{ secrets.SIGNPATH_ORGANIZATION_ID }}"
-          output-artifact-directory: .\installer\windows
-          project-slug: "sqlitebrowser"
-          signing-policy-slug: "test-signing"
-          wait-for-completion: true
 
       - if: github.event_name != 'pull_request'
         name: Create ZIP
         run: |
           $DATE=$(Get-Date -Format "yyyyMMdd")
           if ("${{ inputs.NIGHTLY }}" -eq "true") {
-            $FILENAME_FORMAT="DB.Browser.for.SQLite-$DATE-win-${{ matrix.arch }}.zip"
+            $FILENAME_FORMAT="My.SQLite.Browser-$DATE-win-${{ matrix.arch }}.zip"
           } else {
-            $FILENAME_FORMAT="DB.Browser.for.SQLite-dev-$(git rev-parse --short HEAD)-win-${{ matrix.arch }}.zip"
+            $FILENAME_FORMAT="My.SQLite.Browser-dev-$(git rev-parse --short HEAD)-win-${{ matrix.arch }}.zip"
           }
-          Start-Process msiexec.exe -ArgumentList "/a $(dir installer\windows\DB.Browser.for.SQLite-*.msi) /q TARGETDIR=$PWD\target\" -Wait
-          if ("${{ matrix.arch }}" -eq "x86") {
-            move target\System\* "target\DB Browser for SQLite\"
-          } else {
-            move target\System64\* "target\DB Browser for SQLite\"
-          }
-          Compress-Archive -Path "target\DB Browser for SQLite\*" -DestinationPath $FILENAME_FORMAT
+
+          Start-Process msiexec.exe -ArgumentList "/a $(dir installer\windows\My.SQLite.Browser-*.msi) /q TARGETDIR=$PWD\target\" -Wait
+
+          Remove-Item "target\My SQLite Browser" -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "target\My SQLite Browser" | Out-Null
+
+          Copy-Item "target\DB Browser for SQLite\*" "target\My SQLite Browser\" -Recurse -Force
+
+          Compress-Archive -Path "target\My SQLite Browser\*" -DestinationPath $FILENAME_FORMAT
 
       - if: github.event_name != 'pull_request'
         name: Upload artifacts
@@ -197,8 +177,8 @@ jobs:
         with:
           name: build-artifacts-win-${{ matrix.arch }}
           path: |
-            installer\windows\DB.Browser.for.SQLite-*.msi
-            DB.Browser.for.SQLite-*.zip
+            installer\windows\My.SQLite.Browser-*.msi
+            My.SQLite.Browser-*.zip
           retention-days: 1
 
       - name: Summary

@@ -1,3 +1,6 @@
+// src/sqlitetablemodel.h
+// bk1
+
 #ifndef SQLITETABLEMODEL_H
 #define SQLITETABLEMODEL_H
 
@@ -180,7 +183,7 @@ private:
     // Return matching conditional format color/font or invalid value, otherwise.
     // Only format roles are expected in role (Qt::ItemDataRole)
     QVariant getMatchingCondFormat(size_t row, size_t column, const QString& value, int role) const;
-    QVariant getMatchingCondFormat(const std::map<size_t, std::vector<CondFormat>>& mCondFormats, size_t column, const QString& value, int role) const;
+    QVariant getMatchingCondFormat(const std::map<size_t, std::vector<CondFormat>>& mCondFormats, size_t row, size_t column, const QString& value, int role) const;
 
     DBBrowserDB& m_db;
 

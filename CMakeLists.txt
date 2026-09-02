@@ -153,6 +153,7 @@ target_sources(${PROJECT_NAME}
     src/CipherSettings.h
     src/Palette.h
     src/CondFormat.h
+    src/CondFormatExpr.h
     src/RunSql.h
     src/ProxyDialog.h
     src/SelectItemsPopup.h
@@ -207,6 +208,7 @@ target_sources(${PROJECT_NAME}
     src/CipherSettings.cpp
     src/Palette.cpp
     src/CondFormat.cpp
+    src/CondFormatExpr.cpp
     src/RunSql.cpp
     src/ProxyDialog.cpp
     src/IconCache.cpp
