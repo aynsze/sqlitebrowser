@@ -1,3 +1,6 @@
+// src/CondFormatManager.cpp
+// bk1
+
 #include "CondFormatManager.h"
 #include "ui_CondFormatManager.h"
 #include "CondFormat.h"
@@ -80,11 +83,40 @@ void CondFormatManager::addNewItem()
     QFont font = QFont(Settings::getValue("databrowser", "font").toString());
     font.setPointSize(Settings::getValue("databrowser", "fontsize").toInt());
 
-    CondFormat newCondFormat("", QColor(Settings::getValue("databrowser", "reg_fg_colour").toString()),
-                             m_condFormatPalette.nextSerialColor(Palette::appHasDarkTheme()),
-                             font,
-                             CondFormat::AlignLeft,
-                             m_encoding);
+    // 最初の追加：①と②を一括追加
+    if (ui->tableCondFormats->topLevelItemCount() == 0) {
+
+        addItem(CondFormat(
+            "1",
+            QColor("#000000"),
+            QColor("#f4cccc"),
+            font,
+            CondFormat::AlignLeft,
+            m_encoding
+        ));
+
+        addItem(CondFormat(
+            "0",
+            QColor("#eff0ff"),
+            QColor("#ffffff"),
+            font,
+            CondFormat::AlignLeft,
+            m_encoding
+        ));
+
+        return;
+    }
+
+    // 2回目以降：標準の追加機能
+    CondFormat newCondFormat(
+        "",
+        QColor(Settings::getValue("databrowser", "reg_fg_colour").toString()),
+        m_condFormatPalette.nextSerialColor(Palette::appHasDarkTheme()),
+        font,
+        CondFormat::AlignLeft,
+        m_encoding
+    );
+
     addItem(newCondFormat);
 }
 
