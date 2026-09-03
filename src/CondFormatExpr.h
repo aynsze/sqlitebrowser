@@ -1,5 +1,5 @@
 // src/CondFormatExpr.h
-// bk1
+// bk2
 
 #ifndef CONDFORMATEXPR_H
 #define CONDFORMATEXPR_H
@@ -31,6 +31,21 @@ private:
         const QModelIndex& index);
 
     static bool evaluateFirstDuplicate(
+        const QString& expression,
+        const QAbstractTableModel* model,
+        const QModelIndex& index);
+
+    static bool evaluateContains(
+        const QString& expression,
+        const QAbstractTableModel* model,
+        const QModelIndex& index);
+
+    static bool evaluateStartsWith(
+        const QString& expression,
+        const QAbstractTableModel* model,
+        const QModelIndex& index);
+
+    static bool evaluateNot(
         const QString& expression,
         const QAbstractTableModel* model,
         const QModelIndex& index);

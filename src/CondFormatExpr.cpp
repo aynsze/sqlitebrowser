@@ -1,5 +1,5 @@
 // src/CondFormatExpr.cpp
-// bk1
+// bk2
 
 #include "CondFormatExpr.h"
 
@@ -30,6 +30,10 @@ bool CondFormatExpr::evaluate(
     // Remove "expr:"
     expr = expr.mid(5).trimmed();
 
+    // NOT(expression)
+    if (expr.startsWith("NOT(", Qt::CaseInsensitive))
+        return evaluateNot(expr, model, index);
+
     // DUPLICATE([column])
     if (expr.startsWith("DUPLICATE(", Qt::CaseInsensitive))
         return evaluateDuplicate(expr, model, index);
@@ -37,6 +41,14 @@ bool CondFormatExpr::evaluate(
     // FIRST_DUPLICATE([column])
     if (expr.startsWith("FIRST_DUPLICATE(", Qt::CaseInsensitive))
         return evaluateFirstDuplicate(expr, model, index);
+
+    // CONTAINS([column], 'value')
+    if (expr.startsWith("CONTAINS(", Qt::CaseInsensitive))
+        return evaluateContains(expr, model, index);
+
+    // STARTS_WITH([column], 'value')
+    if (expr.startsWith("STARTS_WITH(", Qt::CaseInsensitive))
+        return evaluateStartsWith(expr, model, index);
 
     // [column] operator value
     return evaluateComparison(expr, model, index);
@@ -217,6 +229,193 @@ bool CondFormatExpr::evaluateFirstDuplicate(
     }
 
     return false;
+}
+
+// NOT(expression)
+bool CondFormatExpr::evaluateNot(
+    const QString& expression,
+    const QAbstractTableModel* model,
+    const QModelIndex& index)
+{
+    const QString prefix = "NOT(";
+    const QString suffix = ")";
+
+    if (!expression.startsWith(prefix, Qt::CaseInsensitive) ||
+        !expression.endsWith(suffix))
+    {
+        return false;
+    }
+
+    QString innerExpression = expression.mid(
+        prefix.length(),
+        expression.length() - prefix.length() - suffix.length());
+
+    innerExpression = innerExpression.trimmed();
+
+    if (innerExpression.isEmpty())
+        return false;
+
+    return !evaluate(innerExpression, model, index);
+}
+
+// CONTAINS([列名], '文字列')
+bool CondFormatExpr::evaluateContains(
+    const QString& expression,
+    const QAbstractTableModel* model,
+    const QModelIndex& index)
+{
+    const QString prefix = "CONTAINS(";
+    const QString suffix = ")";
+
+    if (!expression.startsWith(prefix, Qt::CaseInsensitive) ||
+        !expression.endsWith(suffix))
+    {
+        return false;
+    }
+
+    QString arguments = expression.mid(
+        prefix.length(),
+        expression.length() - prefix.length() - suffix.length());
+
+    arguments = arguments.trimmed();
+
+    // カンマで列名と検索文字列を分離
+    int comma = arguments.indexOf(',');
+
+    if (comma < 0)
+        return false;
+
+    QString columnName = arguments.left(comma).trimmed();
+    QString condition = arguments.mid(comma + 1).trimmed();
+
+    // [column] の形式でなければ無効
+    if (!columnName.startsWith('[') ||
+        !columnName.endsWith(']'))
+    {
+        return false;
+    }
+
+    // [ と ] を削除
+    columnName = columnName.mid(
+        1,
+        columnName.length() - 2);
+
+    columnName = columnName.trimmed();
+
+    if (columnName.isEmpty())
+        return false;
+
+    // 'value' の形式でなければ無効
+    if (condition.length() < 2 ||
+        !condition.startsWith('\'') ||
+        !condition.endsWith('\''))
+    {
+        return false;
+    }
+
+    condition = condition.mid(
+        1,
+        condition.length() - 2);
+
+    // SQL-style escaped single quote
+    condition.replace("''", "'");
+
+    int column = findColumn(columnName, model);
+
+    if (column < 0)
+        return false;
+
+    QVariant currentValue = model->data(
+        model->index(index.row(), column),
+        Qt::DisplayRole);
+
+    // NULL は対象外
+    if (!currentValue.isValid() || currentValue.isNull())
+        return false;
+
+    QString current = currentValue.toString();
+
+    return current.contains(condition);
+}
+
+// STARTS_WITH([列名], '文字列')
+bool CondFormatExpr::evaluateStartsWith(
+    const QString& expression,
+    const QAbstractTableModel* model,
+    const QModelIndex& index)
+{
+    const QString prefix = "STARTS_WITH(";
+    const QString suffix = ")";
+
+    if (!expression.startsWith(prefix, Qt::CaseInsensitive) ||
+        !expression.endsWith(suffix))
+    {
+        return false;
+    }
+
+    QString arguments = expression.mid(
+        prefix.length(),
+        expression.length() - prefix.length() - suffix.length());
+
+    arguments = arguments.trimmed();
+
+    // カンマで列名と検索文字列を分離
+    int comma = arguments.indexOf(',');
+
+    if (comma < 0)
+        return false;
+
+    QString columnName = arguments.left(comma).trimmed();
+    QString condition = arguments.mid(comma + 1).trimmed();
+
+    // [column] の形式でなければ無効
+    if (!columnName.startsWith('[') ||
+        !columnName.endsWith(']'))
+    {
+        return false;
+    }
+
+    // [ と ] を削除
+    columnName = columnName.mid(
+        1,
+        columnName.length() - 2);
+
+    columnName = columnName.trimmed();
+
+    if (columnName.isEmpty())
+        return false;
+
+    // 'value' の形式でなければ無効
+    if (condition.length() < 2 ||
+        !condition.startsWith('\'') ||
+        !condition.endsWith('\''))
+    {
+        return false;
+    }
+
+    condition = condition.mid(
+        1,
+        condition.length() - 2);
+
+    // SQL-style escaped single quote
+    condition.replace("''", "'");
+
+    int column = findColumn(columnName, model);
+
+    if (column < 0)
+        return false;
+
+    QVariant currentValue = model->data(
+        model->index(index.row(), column),
+        Qt::DisplayRole);
+
+    // NULL は対象外
+    if (!currentValue.isValid() || currentValue.isNull())
+        return false;
+
+    QString current = currentValue.toString();
+
+    return current.startsWith(condition);
 }
 
 // 列の値を比較
