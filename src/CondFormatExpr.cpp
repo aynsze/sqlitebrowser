@@ -1,5 +1,5 @@
 // src/CondFormatExpr.cpp
-// bk2
+// bk3
 
 #include "CondFormatExpr.h"
 
@@ -255,7 +255,7 @@ bool CondFormatExpr::evaluateNot(
     if (innerExpression.isEmpty())
         return false;
 
-    return !evaluate(innerExpression, model, index);
+    return !evaluate("expr:" + innerExpression, model, index);
 }
 
 // CONTAINS([列名], '文字列')
