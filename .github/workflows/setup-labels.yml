@@ -1,0 +1,92 @@
+# .github/workflows/setup-labels.yml
+# bk3
+# Issues用のラベルをセットアップするスクリプト
+# setup-labels.ymlが新規作成・更新された場合に実行される（手動も可能）
+
+name: Setup Labels
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/setup-labels.yml'
+
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  setup-labels:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = [
+              {
+                name: "improvement",
+                color: "d73a4a",
+                description: "機能・デザイン・設定などに対する改善・変更・不具合修正"
+              },
+              {
+                name: "feature request",
+                color: "a3eeef",
+                description: "新しい機能や仕様の追加に関する要望"
+              },
+              {
+                name: "create",
+                color: "d4c5f9",
+                description: "新しく作成したいファイルやコードに関するメモ"
+              }
+            ];
+
+            const keepLabels = labels.map(label => label.name);
+
+            // 既存ラベル取得
+            const { data: existingLabels } =
+              await github.rest.issues.listLabelsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100
+              });
+
+            // 不要ラベル削除
+            for (const label of existingLabels) {
+              if (!keepLabels.includes(label.name)) {
+                await github.rest.issues.deleteLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name
+                });
+
+                console.log(`Deleted: ${label.name}`);
+              }
+            }
+
+            // 必要ラベル作成・更新
+            for (const label of labels) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ...label
+                });
+
+                console.log(`Created: ${label.name}`);
+
+              } catch (error) {
+                await github.rest.issues.updateLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name,
+                  color: label.color,
+                  description: label.description
+                });
+
+                console.log(`Updated: ${label.name}`);
+              }
+            }
