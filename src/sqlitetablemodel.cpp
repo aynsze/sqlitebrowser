@@ -290,6 +290,119 @@ void SqliteTableModel::clearCondFormatCache()
     m_condFormatCacheValid = false;
 }
 
+SqliteTableModel::CondFormatResult SqliteTableModel::evaluateCondFormat(
+    const std::map<size_t, std::vector<CondFormat>>& mCondFormats,
+    size_t row,
+    size_t column,
+    const QString& value) const
+{
+    CondFormatResult result;
+
+    auto it = mCondFormats.find(column);
+    if(it == mCondFormats.end())
+        return result;
+
+    bool isNumber;
+    value.toDouble(&isNumber);
+
+    std::string sql;
+
+    for(const CondFormat& eachCondFormat : it->second)
+    {
+        bool matched = false;
+        const QString condition =
+            QString::fromStdString(eachCondFormat.sqlCondition());
+
+        if(CondFormatExpr::isExpression(condition))
+        {
+            QModelIndex cellIndex =
+                index(static_cast<int>(row), static_cast<int>(column));
+
+            matched =
+                CondFormatExpr::evaluate(condition, this, cellIndex);
+        }
+        else
+        {
+            if(isNumber && !contains(eachCondFormat.sqlCondition(), '\''))
+            {
+                sql =
+                    "SELECT " +
+                    value.toStdString() +
+                    " " +
+                    eachCondFormat.sqlCondition();
+            }
+            else
+            {
+                sql =
+                    "SELECT " +
+                    sqlb::escapeString(value.toStdString()) +
+                    " " +
+                    eachCondFormat.sqlCondition();
+            }
+
+            matched =
+                eachCondFormat.filter().isEmpty() ||
+                m_db.querySingleValueFromDb(
+                    sql,
+                    false,
+                    DBBrowserDB::Wait) == "1";
+        }
+
+        if(matched)
+        {
+            result.foreground = eachCondFormat.foregroundColor();
+            result.background = eachCondFormat.backgroundColor();
+            result.font = eachCondFormat.font();
+            result.alignment =
+                static_cast<int>(
+                    eachCondFormat.alignmentFlag() | Qt::AlignVCenter);
+
+            return result;
+        }
+    }
+
+    return result;
+}
+
+SqliteTableModel::CondFormatResult SqliteTableModel::evaluateCondFormats(
+    size_t row,
+    size_t column,
+    const QString& value) const
+{
+    if(m_mRowIdFormats.count(column))
+    {
+        QByteArray rowIdData;
+
+        {
+            std::lock_guard<std::mutex> lock(m_mutexDataCache);
+
+            if(m_cache.count(row))
+                rowIdData = m_cache.at(row).at(0);
+        }
+
+        CondFormatResult result =
+            evaluateCondFormat(
+                m_mRowIdFormats,
+                row,
+                column,
+                rowIdData.isNull() ? QString() : decode(rowIdData));
+
+        if(result.foreground.isValid() ||
+           result.background.isValid() ||
+           result.font.isValid() ||
+           result.alignment.isValid())
+        {
+            return result;
+        }
+    }
+
+    return evaluateCondFormat(
+        m_mCondFormats,
+        row,
+        column,
+        value);
+}
+
 void SqliteTableModel::refreshCondFormatCache()
 {
     if (!completeCache())
