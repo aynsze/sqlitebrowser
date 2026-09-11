@@ -1,5 +1,5 @@
 ﻿// src/sqlitetablemodel.cpp
-// bk1
+// bk2
 
 #include "sqlitetablemodel.h"
 #include "sqlitedb.h"
@@ -20,6 +20,7 @@
 #include <QProgressDialog>
 #include <QRegularExpression>
 #include <QPushButton>
+#include <QTimer>
 
 #include <cassert>
 
@@ -109,6 +110,25 @@ void SqliteTableModel::handleRowCountComplete (int life_id, int num_rows)
     handleFinishedFetch(life_id, static_cast<unsigned int>(num_rows), static_cast<unsigned int>(num_rows));
 
     emit finishedRowCount();
+
+    if (m_condFormatCachePending)
+    {
+        QTimer::singleShot(0, this, [this, life_id]()
+        {
+            if (life_id < m_lifeCounter)
+                return;
+
+            if (!completeCache())
+                return;
+
+            rebuildCondFormatCache();
+            m_condFormatCachePending = false;
+
+            emit dataChanged(
+                index(0, 0),
+                index(rowCount() - 1, columnCount() - 1));
+        });
+    }
 }
 
 void SqliteTableModel::handleError(int life_id, const QString& errMsg)
@@ -284,6 +304,254 @@ QVariant SqliteTableModel::headerData(int section, Qt::Orientation orientation, 
         return QString::number(section + 1);
 }
 
+SqliteTableModel::CondFormatResult
+SqliteTableModel::evaluateCondFormat(
+    const std::map<size_t, std::vector<CondFormat>>& mCondFormats,
+    size_t row,
+    size_t column,
+    const QString& value,
+    bool expressionOnly) const
+{
+    CondFormatResult result;
+    result.valid = true;
+
+    if (!mCondFormats.count(column))
+        return result;
+
+    bool isNumber;
+    value.toDouble(&isNumber);
+    std::string sql;
+
+    for (const CondFormat& eachCondFormat : mCondFormats.at(column))
+    {
+        const QString condition =
+            QString::fromStdString(eachCondFormat.sqlCondition());
+
+        const bool isExpression =
+            CondFormatExpr::isExpression(condition);
+
+        if (isExpression != expressionOnly)
+            continue;
+
+        bool matched = false;
+
+        if (isExpression)
+        {
+            QModelIndex cellIndex = index(
+                static_cast<int>(row),
+                static_cast<int>(column));
+
+            matched = CondFormatExpr::evaluate(
+                condition,
+                this,
+                cellIndex);
+        }
+        else
+        {
+            if (isNumber && !contains(eachCondFormat.sqlCondition(), '\''))
+                sql = "SELECT " + value.toStdString() + " " + eachCondFormat.sqlCondition();
+            else
+                sql = "SELECT " + sqlb::escapeString(value.toStdString()) + " " + eachCondFormat.sqlCondition();
+
+            matched =
+                eachCondFormat.filter().isEmpty() ||
+                m_db.querySingleValueFromDb(
+                    sql,
+                    false,
+                    DBBrowserDB::Wait) == "1";
+        }
+
+        if (matched)
+        {
+            result.matched = true;
+            result.foreground = eachCondFormat.foregroundColor();
+            result.background = eachCondFormat.backgroundColor();
+            result.font = eachCondFormat.font();
+            result.alignment =
+                static_cast<int>(
+                    eachCondFormat.alignmentFlag() |
+                    Qt::AlignVCenter);
+
+            return result;
+        }
+    }
+
+    return result;
+}
+
+SqliteTableModel::CondFormatResult
+SqliteTableModel::evaluateExpressionCondFormats(
+    size_t row,
+    size_t column,
+    const QString& value) const
+{
+    CondFormatResult result;
+
+    // Row ID用のexpr条件
+    if (m_mRowIdFormats.count(column))
+    {
+        std::unique_lock<std::mutex> lock(m_mutexDataCache);
+
+        const bool row_available = m_cache.count(row);
+        const QByteArray blank_data("");
+        const QByteArray row_id_data =
+            row_available ? m_cache.at(row).at(0) : blank_data;
+
+        lock.unlock();
+
+        result = evaluateCondFormat(
+            m_mRowIdFormats,
+            row,
+            column,
+            QString::fromUtf8(row_id_data),
+            true);
+
+        if (result.matched)
+            return result;
+    }
+
+    // 通常列のexpr条件
+    if (m_mCondFormats.count(column))
+    {
+        result = evaluateCondFormat(
+            m_mCondFormats,
+            row,
+            column,
+            value,
+            true);
+
+        if (result.matched)
+            return result;
+    }
+
+    return result;
+}
+
+SqliteTableModel::CondFormatResult
+SqliteTableModel::evaluateNormalCondFormats(
+    size_t row,
+    size_t column,
+    const QString& value) const
+{
+    CondFormatResult result;
+
+    // Row ID用の通常条件
+    if (m_mRowIdFormats.count(column))
+    {
+        std::unique_lock<std::mutex> lock(m_mutexDataCache);
+
+        const bool row_available = m_cache.count(row);
+        const QByteArray blank_data("");
+        const QByteArray row_id_data =
+            row_available ? m_cache.at(row).at(0) : blank_data;
+
+        lock.unlock();
+
+        result = evaluateCondFormat(
+            m_mRowIdFormats,
+            row,
+            column,
+            QString::fromUtf8(row_id_data),
+            false);
+
+        if (result.matched)
+            return result;
+    }
+
+    // 通常列の通常条件
+    if (m_mCondFormats.count(column))
+    {
+        result = evaluateCondFormat(
+            m_mCondFormats,
+            row,
+            column,
+            value,
+            false);
+
+        if (result.matched)
+            return result;
+    }
+
+    return result;
+}
+
+void SqliteTableModel::invalidateNormalCondFormatCache(
+    size_t row,
+    size_t column)
+{
+    if (row >= m_condFormatCache.size())
+        return;
+
+    if (column >= m_condFormatCache[row].size())
+        return;
+
+    m_condFormatCache[row][column].normalValid = false;
+}
+
+void SqliteTableModel::clearCondFormatCache()
+{
+    m_condFormatCache.clear();
+    m_condFormatCacheValid = false;
+}
+
+void SqliteTableModel::rebuildCondFormatCache()
+{
+    clearCondFormatCache();
+
+    const size_t rows = static_cast<size_t>(rowCount());
+    const size_t columns = static_cast<size_t>(columnCount());
+
+    if (rows == 0 || columns == 0)
+        return;
+
+    m_condFormatCache.resize(rows);
+
+    for (size_t row = 0; row < rows; ++row)
+    {
+        m_condFormatCache[row].resize(columns);
+
+        for (size_t column = 0; column < columns; ++column)
+        {
+            std::unique_lock<std::mutex> lock(m_mutexDataCache);
+
+            const bool row_available = m_cache.count(row);
+            const QByteArray blank_data("");
+            const QByteArray data =
+                row_available ? m_cache.at(row).at(column) : blank_data;
+
+            lock.unlock();
+
+            if (!row_available)
+                continue;
+
+            // NULL / BLOBは現在のdata()と同様、
+            // 条件付き書式の対象外とする。
+            if (data.isNull() || isBinary(data))
+                continue;
+
+            const QString value = decode(data);
+
+            m_condFormatCache[row][column].normal =
+                evaluateNormalCondFormats(
+                    row,
+                    column,
+                    value);
+
+            m_condFormatCache[row][column].normalValid = true;
+
+            m_condFormatCache[row][column].expression =
+                evaluateExpressionCondFormats(
+                    row,
+                    column,
+                    value);
+
+            m_condFormatCache[row][column].expressionValid = true;
+        }
+    }
+
+    m_condFormatCacheValid = true;
+}
+
 QVariant SqliteTableModel::getMatchingCondFormat(const std::map<size_t, std::vector<CondFormat>>& mCondFormats, size_t row, size_t column, const QString& value, int role) const
 {
     if (!mCondFormats.count(column))
@@ -364,7 +632,7 @@ QVariant SqliteTableModel::getMatchingCondFormat(size_t row, size_t column, cons
         std::unique_lock<std::mutex> lock(m_mutexDataCache);
         const bool row_available = m_cache.count(row);
         const QByteArray blank_data("");
-        const QByteArray& row_id_data = row_available ? m_cache.at(row).at(0) : blank_data;
+        const QByteArray row_id_data = row_available ? m_cache.at(row).at(0) : blank_data;
         lock.unlock();
 
         format = getMatchingCondFormat(m_mRowIdFormats, row, column, row_id_data, role);
@@ -384,14 +652,72 @@ QVariant SqliteTableModel::data(const QModelIndex &index, int role) const
     if (index.row() >= rowCount())
         return QVariant();
 
-    std::unique_lock<std::mutex> lock(m_mutexDataCache);
-
     const size_t row = static_cast<size_t>(index.row());
     const size_t column = static_cast<size_t>(index.column());
 
-    const bool row_available = m_cache.count(row);
-    const QByteArray blank_data("");
-    const QByteArray& data = row_available ? m_cache.at(row).at(column) : blank_data;
+    bool row_available;
+    QByteArray data;
+
+    {
+        std::unique_lock<std::mutex> lock(m_mutexDataCache);
+
+        row_available = m_cache.count(row);
+
+        if (row_available)
+            data = m_cache.at(row).at(column);
+        else
+            data = QByteArray("");
+    }
+
+    // 条件付き書式
+    CondFormatResult condFormatResult;
+    bool hasCondFormat = false;
+
+    if (m_condFormatCacheValid &&
+        row < m_condFormatCache.size() &&
+        column < m_condFormatCache[row].size() &&
+        row_available &&
+        !data.isNull() &&
+        !isBinary(data))
+    {
+        CondFormatCellCache& cellCache =
+            m_condFormatCache[row][column];
+
+        // 通常のSQL条件
+        // セル編集によって無効になっていた場合だけ再評価する。
+        if (!cellCache.normalValid)
+        {
+            const QString value = decode(data);
+
+            CondFormatResult result =
+                evaluateNormalCondFormats(
+                    row,
+                    column,
+                    value);
+
+            {
+                std::unique_lock<std::mutex> lock(m_mutexDataCache);
+
+                cellCache.normal = result;
+                cellCache.normalValid = true;
+            }
+        }
+
+        // 通常のSQL条件を優先する。
+        if (cellCache.normalValid && cellCache.normal.matched)
+        {
+            condFormatResult = cellCache.normal;
+            hasCondFormat = true;
+        }
+        // expr: はキャッシュされた結果だけを使用する。
+        // セル編集時にはここで再評価しない。
+        else if (cellCache.expressionValid &&
+                cellCache.expression.matched)
+        {
+            condFormatResult = cellCache.expression;
+            hasCondFormat = true;
+        }
+    }
 
     if(role == Qt::DisplayRole)
     {
@@ -429,13 +755,8 @@ QVariant SqliteTableModel::data(const QModelIndex &index, int role) const
         QFont font = m_font;
         if(!row_available || data.isNull() || isBinary(data))
             font.setItalic(true);
-        else {
-            // Unlock before querying from DB
-            lock.unlock();
-            QVariant condFormatFont = getMatchingCondFormat(row, column, data, role);
-            if (condFormatFont.isValid())
-                return condFormatFont;
-        }
+        else if(hasCondFormat && condFormatResult.font.isValid())
+            return condFormatResult.font;
         return font;
     } else if(role == Qt::ForegroundRole) {
         if(!row_available)
@@ -445,11 +766,8 @@ QVariant SqliteTableModel::data(const QModelIndex &index, int role) const
         else if (isBinary(data))
             return m_binFgColour;
         else {
-            // Unlock before querying from DB
-            lock.unlock();
-            QVariant condFormatColor = getMatchingCondFormat(row, column, data, role);
-            if (condFormatColor.isValid())
-                return condFormatColor;
+            if (hasCondFormat && condFormatResult.foreground.isValid())
+                return condFormatResult.foreground;
             if (hasDisplayFormat(index))
                 return m_formattedFgColour;
         }
@@ -463,11 +781,8 @@ QVariant SqliteTableModel::data(const QModelIndex &index, int role) const
         else if (isBinary(data))
             return m_binBgColour;
         else {
-            // Unlock before querying from DB
-            lock.unlock();
-            QVariant condFormatColor = getMatchingCondFormat(row, column, data, role);
-            if (condFormatColor.isValid())
-                return condFormatColor;
+            if (hasCondFormat && condFormatResult.background.isValid())
+                return condFormatResult.background;
             if (hasDisplayFormat(index))
                 return m_formattedBgColour;
         }
@@ -483,10 +798,8 @@ QVariant SqliteTableModel::data(const QModelIndex &index, int role) const
     } else if (role == Qt::TextAlignmentRole) {
         // Align horizontally according to conditional format or default (left for text and right for numbers)
         // Align vertically to the center, which displays better.
-        lock.unlock();
-        QVariant condFormat = getMatchingCondFormat(row, column, data, role);
-        if (condFormat.isValid())
-            return condFormat;
+        if (hasCondFormat && condFormatResult.alignment.isValid())
+            return condFormatResult.alignment;
         bool isNumber = m_vDataTypes.at(column) == SQLITE_INTEGER || m_vDataTypes.at(column) == SQLITE_FLOAT;
         return static_cast<int>((isNumber ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter);
     } else if(role == Qt::DecorationRole) {
@@ -599,7 +912,10 @@ bool SqliteTableModel::setTypedData(const QModelIndex& index, bool isBlob, const
             cached_row[column] = newValue;
 
             // After updating the value itself in the cache, we need to check if we need to update the rowid too.
-            if(contains(m_query.rowIdColumns(), m_headers.at(column)))
+            bool rowidChanged =
+                contains(m_query.rowIdColumns(), m_headers.at(column));
+
+            if(rowidChanged)
             {
                 // When the cached rowid column needs to be updated as well, we need to distinguish between single-column and multi-column primary keys.
                 // For the former ones, we can just overwrite the existing value with the new value.
@@ -618,11 +934,20 @@ bool SqliteTableModel::setTypedData(const QModelIndex& index, bool isBlob, const
                     }
                     cached_row[0] = output;
                 }
+            }
+
+            lock.unlock();
+
+            // セル編集では通常のSQL条件だけを再評価対象にする。
+            // expr: のキャッシュはそのまま残す。
+            invalidateNormalCondFormatCache(
+                static_cast<size_t>(index.row()),
+                column);
+
+            if(rowidChanged)
+            {
                 const QModelIndex& rowidIndex = index.sibling(index.row(), 0);
-                lock.unlock();
                 emit dataChanged(rowidIndex, rowidIndex);
-            } else {
-                lock.unlock();
             }
             emit dataChanged(index, index);
             return true;
@@ -807,6 +1132,10 @@ void SqliteTableModel::updateAndRunQuery()
 {
     clearCache();
 
+    m_condFormatCachePending =
+        !m_mCondFormats.empty() ||
+        !m_mRowIdFormats.empty();
+
     // Update the query
     m_sQuery = QString::fromStdString(m_query.buildQuery(true));
     QString sCountQuery = QString::fromStdString(m_query.buildCountQuery());
@@ -911,6 +1240,7 @@ void SqliteTableModel::clearCache()
     }
 
     m_cache.clear();
+    clearCondFormatCache();
 
     m_currentRowCount = 0;
     m_realRowCount = 0;

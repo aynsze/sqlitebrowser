@@ -1,5 +1,5 @@
 // src/sqlitetablemodel.h
-// bk1
+// bk2
 
 #ifndef SQLITETABLEMODEL_H
 #define SQLITETABLEMODEL_H
@@ -7,6 +7,7 @@
 #include <QAbstractTableModel>
 #include <QColor>
 #include <QFont>
+#include <QVariant>
 
 #include <map>
 #include <memory>
@@ -180,6 +181,44 @@ private:
     QByteArray encode(const QByteArray& str) const;
     QByteArray decode(const QByteArray& str) const;
 
+    struct CondFormatResult
+    {
+        bool valid = false;
+        bool matched = false;
+        QVariant foreground;
+        QVariant background;
+        QVariant font;
+        QVariant alignment;
+    };
+
+    struct CondFormatCellCache
+    {
+        CondFormatResult normal;
+        CondFormatResult expression;
+
+        bool normalValid = false;
+        bool expressionValid = false;
+    };
+
+    CondFormatResult evaluateCondFormat(
+        const std::map<size_t, std::vector<CondFormat>>& mCondFormats,
+        size_t row,
+        size_t column,
+        const QString& value,
+        bool expressionOnly) const;
+
+    CondFormatResult evaluateNormalCondFormats(
+        size_t row,
+        size_t column,
+        const QString& value) const;
+
+    CondFormatResult evaluateExpressionCondFormats(
+        size_t row,
+        size_t column,
+        const QString& value) const;
+
+    void invalidateNormalCondFormatCache(size_t row, size_t column);
+
     // Return matching conditional format color/font or invalid value, otherwise.
     // Only format roles are expected in role (Qt::ItemDataRole)
     QVariant getMatchingCondFormat(size_t row, size_t column, const QString& value, int role) const;
@@ -211,6 +250,13 @@ private:
     mutable RowCache<Row> m_cache;
 
     Row makeDefaultCacheEntry () const;
+
+    void clearCondFormatCache();
+    void rebuildCondFormatCache();
+
+    mutable std::vector<std::vector<CondFormatCellCache>> m_condFormatCache;
+    mutable bool m_condFormatCacheValid = false;
+    bool m_condFormatCachePending = false;
 
     bool isBinary(const QByteArray& index) const;
 
