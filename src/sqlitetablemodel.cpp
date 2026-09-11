@@ -405,6 +405,7 @@ SqliteTableModel::CondFormatResult SqliteTableModel::evaluateCondFormats(
 
 void SqliteTableModel::refreshCondFormatCache()
 {
+    waitUntilIdle();
     rebuildCondFormatCache();
 }
 
