@@ -760,7 +760,8 @@ bool SqliteTableModel::setTypedData(const QModelIndex& index, bool isBlob, const
                 }
             }
 
-            // After updating the value itself in the cache, we need to check if we need to update the rowid too.            if(contains(m_query.rowIdColumns(), m_headers.at(column)))
+            // After updating the value itself in the cache, we need to check if we need to update the rowid too.            
+            if(contains(m_query.rowIdColumns(), m_headers.at(column)))
             {
                 // When the cached rowid column needs to be updated as well, we need to distinguish between single-column and multi-column primary keys.
                 // For the former ones, we can just overwrite the existing value with the new value.
