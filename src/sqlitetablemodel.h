@@ -170,6 +170,9 @@ private:
         QVariant background;
         QVariant font;
         QVariant alignment;
+
+        bool matched = false;
+        bool isExpression = false;
     };
 
     friend class RowLoader;
@@ -194,12 +197,14 @@ private:
         const std::map<size_t, std::vector<CondFormat>>& mCondFormats,
         size_t row,
         size_t column,
-        const QString& value) const;
+        const QString& value,
+        bool includeExpressions = true) const;
 
     CondFormatResult evaluateCondFormats(
         size_t row,
         size_t column,
-        const QString& value) const;
+        const QString& value,
+        bool includeExpressions = true) const;
 
     QByteArray encode(const QByteArray& str) const;
     QByteArray decode(const QByteArray& str) const;
@@ -241,6 +246,9 @@ private:
     // 条件付き書式の計算結果キャッシュ
     std::vector<std::vector<CondFormatResult>> m_condFormatCache;
     bool m_condFormatCacheValid = false;
+
+    // Refresh後のデータ取得完了時に条件付き書式を再計算する
+    bool m_condFormatRefreshPending = false;
 
     sqlb::Query m_query;
     std::shared_ptr<sqlb::Table> m_table_of_query;  // This holds a pointer to the table object which is queried in the m_query object

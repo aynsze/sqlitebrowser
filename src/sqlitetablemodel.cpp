@@ -93,6 +93,10 @@ void SqliteTableModel::handleFinishedFetch (int life_id, unsigned int fetched_ro
         m_rowCountAvailable = RowCount::Partial;
 
     emit finishedFetch(static_cast<int>(fetched_row_begin), static_cast<int>(fetched_row_end));
+    if(m_condFormatRefreshPending && !readingData())
+    {
+        rebuildCondFormatCache();
+    }
 }
 
 void SqliteTableModel::handleRowCountComplete (int life_id, int num_rows)
@@ -294,7 +298,8 @@ SqliteTableModel::CondFormatResult SqliteTableModel::evaluateCondFormat(
     const std::map<size_t, std::vector<CondFormat>>& mCondFormats,
     size_t row,
     size_t column,
-    const QString& value) const
+    const QString& value,
+    bool includeExpressions) const
 {
     CondFormatResult result;
 
@@ -309,11 +314,18 @@ SqliteTableModel::CondFormatResult SqliteTableModel::evaluateCondFormat(
 
     for(const CondFormat& eachCondFormat : it->second)
     {
-        bool matched = false;
         const QString condition =
             QString::fromStdString(eachCondFormat.sqlCondition());
 
-        if(CondFormatExpr::isExpression(condition))
+        const bool isExpression =
+            CondFormatExpr::isExpression(condition);
+
+        if(isExpression && !includeExpressions)
+            continue;
+
+        bool matched = false;
+
+        if(isExpression)
         {
             QModelIndex cellIndex =
                 index(static_cast<int>(row), static_cast<int>(column));
@@ -357,6 +369,9 @@ SqliteTableModel::CondFormatResult SqliteTableModel::evaluateCondFormat(
                 static_cast<int>(
                     eachCondFormat.alignmentFlag() | Qt::AlignVCenter);
 
+            result.matched = true;
+            result.isExpression = isExpression;
+
             return result;
         }
     }
@@ -367,7 +382,8 @@ SqliteTableModel::CondFormatResult SqliteTableModel::evaluateCondFormat(
 SqliteTableModel::CondFormatResult SqliteTableModel::evaluateCondFormats(
     size_t row,
     size_t column,
-    const QString& value) const
+    const QString& value,
+    bool includeExpressions) const
 {
     if(m_mRowIdFormats.count(column))
     {
@@ -385,28 +401,27 @@ SqliteTableModel::CondFormatResult SqliteTableModel::evaluateCondFormats(
                 m_mRowIdFormats,
                 row,
                 column,
-                rowIdData.isNull() ? QString() : decode(rowIdData));
+                rowIdData.isNull() ? QString() : decode(rowIdData),
+                includeExpressions);
 
-        if(result.foreground.isValid() ||
-           result.background.isValid() ||
-           result.font.isValid() ||
-           result.alignment.isValid())
-        {
+        if(result.matched)
             return result;
-        }
     }
 
     return evaluateCondFormat(
         m_mCondFormats,
         row,
         column,
-        value);
+        value,
+        includeExpressions);
 }
 
 void SqliteTableModel::refreshCondFormatCache()
 {
-    waitUntilIdle();
-    rebuildCondFormatCache();
+    m_condFormatRefreshPending = true;
+
+    if(!readingData())
+        rebuildCondFormatCache();
 }
 
 void SqliteTableModel::rebuildCondFormatCache()
@@ -456,6 +471,7 @@ void SqliteTableModel::rebuildCondFormatCache()
     }
 
     m_condFormatCacheValid = true;
+    m_condFormatRefreshPending = false;
 }
 QVariant SqliteTableModel::data(const QModelIndex &index, int role) const
 {
@@ -703,8 +719,48 @@ bool SqliteTableModel::setTypedData(const QModelIndex& index, bool isBlob, const
         {
             cached_row[column] = newValue;
 
-            // After updating the value itself in the cache, we need to check if we need to update the rowid too.
-            if(contains(m_query.rowIdColumns(), m_headers.at(column)))
+            const size_t row = static_cast<size_t>(index.row());
+
+            // expr: は編集時には再計算しない。
+            // 通常の条件付き書式だけを再計算する。
+            if(m_condFormatCacheValid &&
+            row < m_condFormatCache.size() &&
+            column < m_condFormatCache[row].size())
+            {
+                CondFormatResult regularResult =
+                    evaluateCondFormats(
+                        row,
+                        column,
+                        newValue.isNull() ? QString() : decode(newValue),
+                        false);
+
+                if(newValue.isNull() || isBinary(newValue))
+                {
+                    regularResult.foreground = QVariant();
+                    regularResult.background = QVariant();
+                    regularResult.font = QVariant();
+                }
+
+                CondFormatResult& cachedResult =
+                    m_condFormatCache[row][column];
+
+                // 既存のexpr:が一致している場合は、
+                // expr: の結果を保持する。
+                if(cachedResult.isExpression)
+                {
+                    if(regularResult.matched && !regularResult.isExpression)
+                    {
+                        // expr: の方が優先されるため、
+                        // 通常条件の結果はキャッシュに反映しない。
+                    }
+                }
+                else
+                {
+                    cachedResult = regularResult;
+                }
+            }
+
+            // After updating the value itself in the cache, we need to check if we need to update the rowid too.            if(contains(m_query.rowIdColumns(), m_headers.at(column)))
             {
                 // When the cached rowid column needs to be updated as well, we need to distinguish between single-column and multi-column primary keys.
                 // For the former ones, we can just overwrite the existing value with the new value.
@@ -1005,6 +1061,7 @@ void SqliteTableModel::clearCache()
     m_lifeCounter++;
 
     clearCondFormatCache();
+    m_condFormatRefreshPending = false;
 
     if(m_db.isOpen()) {
         worker->cancel();
