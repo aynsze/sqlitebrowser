@@ -1,3 +1,6 @@
+// src/TableBrowser.cpp
+// bk1
+
 #include "AddRecordDialog.h"
 #include "Application.h"
 #include "ColumnDisplayFormatDialog.h"
@@ -599,6 +602,7 @@ void TableBrowser::refresh()
 
     // Build query and apply settings
     applyModelSettings(storedData, buildQuery(storedData, tablename));
+    m_model->refreshCondFormatCache();
     applyViewportSettings(storedData, tablename);
     emit updatePlot(ui->dataTable, m_model, &m_settings[tablename], true);
     

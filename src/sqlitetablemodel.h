@@ -1,5 +1,5 @@
 // src/sqlitetablemodel.h
-// bk2
+// bk3
 
 #ifndef SQLITETABLEMODEL_H
 #define SQLITETABLEMODEL_H
@@ -7,7 +7,6 @@
 #include <QAbstractTableModel>
 #include <QColor>
 #include <QFont>
-#include <QVariant>
 
 #include <map>
 #include <memory>
@@ -78,6 +77,8 @@ public:
     /// cache, where entries can vanish again -- however we can't do
     /// this for the current implementation of the PlotDock]
     bool isCacheComplete () const;
+
+    void refreshCondFormatCache();
 
     bool insertRows(int row, int count, const QModelIndex& parent = QModelIndex()) override;
     bool removeRows(int row, int count, const QModelIndex& parent = QModelIndex()) override;
@@ -163,6 +164,14 @@ protected:
     bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column, const QModelIndex& parent) override;
 
 private:
+    struct CondFormatResult
+    {
+        QVariant foreground;
+        QVariant background;
+        QVariant font;
+        QVariant alignment;
+    };
+
     friend class RowLoader;
     class RowLoader * worker;
 
@@ -178,51 +187,22 @@ private:
 
     void getColumnNames(const std::string& sQuery);
 
-    QByteArray encode(const QByteArray& str) const;
-    QByteArray decode(const QByteArray& str) const;
-
-    struct CondFormatResult
-    {
-        bool valid = false;
-        bool matched = false;
-        QVariant foreground;
-        QVariant background;
-        QVariant font;
-        QVariant alignment;
-    };
-
-    struct CondFormatCellCache
-    {
-        CondFormatResult normal;
-        CondFormatResult expression;
-
-        bool normalValid = false;
-        bool expressionValid = false;
-    };
+    void clearCondFormatCache();
+    void rebuildCondFormatCache();
 
     CondFormatResult evaluateCondFormat(
         const std::map<size_t, std::vector<CondFormat>>& mCondFormats,
         size_t row,
         size_t column,
-        const QString& value,
-        bool expressionOnly) const;
+        const QString& value) const;
 
-    CondFormatResult evaluateNormalCondFormats(
+    CondFormatResult evaluateCondFormats(
         size_t row,
         size_t column,
         const QString& value) const;
 
-    CondFormatResult evaluateExpressionCondFormats(
-        size_t row,
-        size_t column,
-        const QString& value) const;
-
-    void invalidateNormalCondFormatCache(size_t row, size_t column);
-
-    // Return matching conditional format color/font or invalid value, otherwise.
-    // Only format roles are expected in role (Qt::ItemDataRole)
-    QVariant getMatchingCondFormat(size_t row, size_t column, const QString& value, int role) const;
-    QVariant getMatchingCondFormat(const std::map<size_t, std::vector<CondFormat>>& mCondFormats, size_t row, size_t column, const QString& value, int role) const;
+    QByteArray encode(const QByteArray& str) const;
+    QByteArray decode(const QByteArray& str) const;
 
     DBBrowserDB& m_db;
 
@@ -251,19 +231,16 @@ private:
 
     Row makeDefaultCacheEntry () const;
 
-    void clearCondFormatCache();
-    void rebuildCondFormatCache();
-
-    mutable std::vector<std::vector<CondFormatCellCache>> m_condFormatCache;
-    mutable bool m_condFormatCacheValid = false;
-    bool m_condFormatCachePending = false;
-
     bool isBinary(const QByteArray& index) const;
 
     QString m_sQuery;
     std::vector<int> m_vDataTypes;
     std::map<size_t, std::vector<CondFormat>> m_mCondFormats;
     std::map<size_t, std::vector<CondFormat>> m_mRowIdFormats;
+
+    // 条件付き書式の計算結果キャッシュ
+    std::vector<std::vector<CondFormatResult>> m_condFormatCache;
+    bool m_condFormatCacheValid = false;
 
     sqlb::Query m_query;
     std::shared_ptr<sqlb::Table> m_table_of_query;  // This holds a pointer to the table object which is queried in the m_query object
