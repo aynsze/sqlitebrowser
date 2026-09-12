@@ -1,5 +1,5 @@
 // src/sqlitetablemodel.h
-// bk3
+// bk4
 
 #ifndef SQLITETABLEMODEL_H
 #define SQLITETABLEMODEL_H
@@ -191,7 +191,10 @@ private:
     void getColumnNames(const std::string& sQuery);
 
     void clearCondFormatCache();
-    void rebuildCondFormatCache();
+    void calculateCondFormatCache(
+            unsigned int row_begin,
+            unsigned int row_end,
+            bool forceRefresh = false);
 
     CondFormatResult evaluateCondFormat(
         const std::map<size_t, std::vector<CondFormat>>& mCondFormats,
@@ -245,9 +248,11 @@ private:
 
     // 条件付き書式の計算結果キャッシュ
     std::vector<std::vector<CondFormatResult>> m_condFormatCache;
-    bool m_condFormatCacheValid = false;
 
-    // Refresh後のデータ取得完了時に条件付き書式を再計算する
+    // 各行の条件付き書式が計算済みか
+    std::vector<bool> m_condFormatCacheCalculated;
+
+    // Refresh後は、データ取得済みの範囲を再計算する
     bool m_condFormatRefreshPending = false;
 
     sqlb::Query m_query;

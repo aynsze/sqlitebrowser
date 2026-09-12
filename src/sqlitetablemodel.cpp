@@ -1,5 +1,5 @@
 ﻿// src/sqlitetablemodel.cpp
-// bk2
+// bk3
 
 #include "sqlitetablemodel.h"
 #include "sqlitedb.h"
@@ -93,9 +93,18 @@ void SqliteTableModel::handleFinishedFetch (int life_id, unsigned int fetched_ro
         m_rowCountAvailable = RowCount::Partial;
 
     emit finishedFetch(static_cast<int>(fetched_row_begin), static_cast<int>(fetched_row_end));
-    if(m_condFormatRefreshPending && !readingData())
+
+    if(fetched_row_end != fetched_row_begin)
     {
-        rebuildCondFormatCache();
+        const bool forceRefresh = m_condFormatRefreshPending;
+
+        calculateCondFormatCache(
+            fetched_row_begin,
+            fetched_row_end,
+            forceRefresh);
+
+        if(forceRefresh)
+            m_condFormatRefreshPending = false;
     }
 }
 
@@ -291,7 +300,7 @@ QVariant SqliteTableModel::headerData(int section, Qt::Orientation orientation, 
 void SqliteTableModel::clearCondFormatCache()
 {
     m_condFormatCache.clear();
-    m_condFormatCacheValid = false;
+    m_condFormatCacheCalculated.clear();
 }
 
 SqliteTableModel::CondFormatResult SqliteTableModel::evaluateCondFormat(
@@ -421,22 +430,39 @@ void SqliteTableModel::refreshCondFormatCache()
     m_condFormatRefreshPending = true;
 
     if(!readingData())
-        rebuildCondFormatCache();
+    {
+        calculateCondFormatCache(
+            0,
+            m_currentRowCount,
+            true);
+
+        m_condFormatRefreshPending = false;
+    }
 }
 
-void SqliteTableModel::rebuildCondFormatCache()
+void SqliteTableModel::calculateCondFormatCache(
+    unsigned int row_begin,
+    unsigned int row_end,
+    bool forceRefresh)
 {
-    m_condFormatCache.clear();
-
-    const size_t rows = static_cast<size_t>(m_currentRowCount);
     const size_t columns = m_headers.size();
 
-    m_condFormatCache.resize(rows);
-    for(auto& row : m_condFormatCache)
-        row.resize(columns);
+    // キャッシュのサイズを、現在取得済みの行数に合わせる
+    if(m_condFormatCache.size() < m_currentRowCount)
+        m_condFormatCache.resize(m_currentRowCount);
 
-    for(size_t row = 0; row < rows; ++row)
+    if(m_condFormatCacheCalculated.size() < m_currentRowCount)
+        m_condFormatCacheCalculated.resize(m_currentRowCount, false);
+
+    const unsigned int end =
+        std::min(row_end, m_currentRowCount);
+
+    for(unsigned int row = row_begin; row < end; ++row)
     {
+        // Refreshでない場合、すでに計算済みの行は再計算しない
+        if(!forceRefresh && m_condFormatCacheCalculated[row])
+            continue;
+
         Row cacheRow;
 
         {
@@ -448,10 +474,14 @@ void SqliteTableModel::rebuildCondFormatCache()
             cacheRow = m_cache.at(row);
         }
 
+        if(m_condFormatCache[row].size() != columns)
+            m_condFormatCache[row].resize(columns);
+
         for(size_t column = 0; column < columns; ++column)
         {
             const QByteArray& data = cacheRow.at(column);
-            const QString value = data.isNull() ? QString() : decode(data);
+            const QString value =
+                data.isNull() ? QString() : decode(data);
 
             CondFormatResult result =
                 evaluateCondFormats(row, column, value);
@@ -468,11 +498,11 @@ void SqliteTableModel::rebuildCondFormatCache()
 
             m_condFormatCache[row][column] = result;
         }
-    }
 
-    m_condFormatCacheValid = true;
-    m_condFormatRefreshPending = false;
+        m_condFormatCacheCalculated[row] = true;
+    }
 }
+
 QVariant SqliteTableModel::data(const QModelIndex &index, int role) const
 {
     if (!index.isValid())
@@ -526,7 +556,8 @@ QVariant SqliteTableModel::data(const QModelIndex &index, int role) const
         QFont font = m_font;
         if(!row_available || data.isNull() || isBinary(data))
             font.setItalic(true);
-        else if(m_condFormatCacheValid &&
+        else if(row < m_condFormatCacheCalculated.size() &&
+                m_condFormatCacheCalculated[row] &&
                 row < m_condFormatCache.size() &&
                 column < m_condFormatCache[row].size())
         {
@@ -547,7 +578,8 @@ QVariant SqliteTableModel::data(const QModelIndex &index, int role) const
         else {
             lock.unlock();
 
-            if(m_condFormatCacheValid &&
+            if(row < m_condFormatCacheCalculated.size() &&
+            m_condFormatCacheCalculated[row] &&
             row < m_condFormatCache.size() &&
             column < m_condFormatCache[row].size())
             {
@@ -572,7 +604,8 @@ QVariant SqliteTableModel::data(const QModelIndex &index, int role) const
         else {
             lock.unlock();
 
-            if(m_condFormatCacheValid &&
+            if(row < m_condFormatCacheCalculated.size() &&
+            m_condFormatCacheCalculated[row] &&
             row < m_condFormatCache.size() &&
             column < m_condFormatCache[row].size())
             {
@@ -597,7 +630,8 @@ QVariant SqliteTableModel::data(const QModelIndex &index, int role) const
     } else if (role == Qt::TextAlignmentRole) {
         lock.unlock();
 
-        if(m_condFormatCacheValid &&
+        if(row < m_condFormatCacheCalculated.size() &&
+        m_condFormatCacheCalculated[row] &&
         row < m_condFormatCache.size() &&
         column < m_condFormatCache[row].size())
         {
@@ -723,40 +757,43 @@ bool SqliteTableModel::setTypedData(const QModelIndex& index, bool isBlob, const
 
             // expr: は編集時には再計算しない。
             // 通常の条件付き書式だけを再計算する。
-            if(m_condFormatCacheValid &&
-            row < m_condFormatCache.size() &&
-            column < m_condFormatCache[row].size())
+            if(row < m_condFormatCacheCalculated.size() &&
+            m_condFormatCacheCalculated[row] &&
+            row < m_condFormatCache.size())
             {
-                CondFormatResult regularResult =
-                    evaluateCondFormats(
-                        row,
-                        column,
-                        newValue.isNull() ? QString() : decode(newValue),
-                        false);
+                // 編集時はexpr:を再計算せず、
+                // この行の通常条件だけを再計算する。
+                Row cacheRow = cached_row;
 
-                if(newValue.isNull() || isBinary(newValue))
+                for(size_t currentColumn = 0;
+                    currentColumn < m_headers.size();
+                    ++currentColumn)
                 {
-                    regularResult.foreground = QVariant();
-                    regularResult.background = QVariant();
-                    regularResult.font = QVariant();
-                }
+                    const QByteArray& currentData = cacheRow.at(currentColumn);
+                    const QString currentValue =
+                        currentData.isNull() ? QString() : decode(currentData);
 
-                CondFormatResult& cachedResult =
-                    m_condFormatCache[row][column];
+                    CondFormatResult regularResult =
+                        evaluateCondFormats(
+                            row,
+                            currentColumn,
+                            currentValue,
+                            false);
 
-                // 既存のexpr:が一致している場合は、
-                // expr: の結果を保持する。
-                if(cachedResult.isExpression)
-                {
-                    if(regularResult.matched && !regularResult.isExpression)
+                    if(currentData.isNull() || isBinary(currentData))
                     {
-                        // expr: の方が優先されるため、
-                        // 通常条件の結果はキャッシュに反映しない。
+                        regularResult.foreground = QVariant();
+                        regularResult.background = QVariant();
+                        regularResult.font = QVariant();
                     }
-                }
-                else
-                {
-                    cachedResult = regularResult;
+
+                    CondFormatResult& cachedResult =
+                        m_condFormatCache[row][currentColumn];
+
+                    // 既存のexpr:が一致している場合は、
+                    // expr:の結果を保持する。
+                    if(!cachedResult.isExpression)
+                        cachedResult = regularResult;
                 }
             }
 
